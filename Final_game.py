@@ -12,7 +12,7 @@ ACCELERATION = 1.0
 FRICTION = -0.12
 GRAVITY = 0.8
 JUMP_FORCE = -17
-DOUBLE_JUMP_THRESHOLD = 500  # Score needed to unlock double jump
+DOUBLE_JUMP_THRESHOLD = 100  # LOWERED TO 100 SO YOU CAN TEST IT SOONER!
 
 # Colors (Dashboard Palette)
 BG_COLOR = (20, 24, 35)      # Dark Navy/Grey
@@ -43,7 +43,6 @@ class Particle(pygame.sprite.Sprite):
         self.life -= 1
         if self.life <= 0:
             self.kill()
-        # Fade out effect (requires converting surface to support alpha)
         self.image.set_alpha(int((self.life / 30) * 255))
 
 class Player(pygame.sprite.Sprite):
@@ -61,8 +60,7 @@ class Player(pygame.sprite.Sprite):
         self.acc = pygame.math.Vector2(0, 0)
         
         # State
-        self.jumping = False
-        self.double_jump_ready = False
+        self.jump_count = 0  # <--- NEW: Tracks jumps (0, 1, or 2)
         self.multiplier_timer = 0
         self.lives = 3
         self.score = 0
@@ -73,8 +71,7 @@ class Player(pygame.sprite.Sprite):
         self.vel = pygame.math.Vector2(0, 0)
         self.acc = pygame.math.Vector2(0, 0)
         self.rect.center = (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 100)
-        self.jumping = False
-        self.double_jump_ready = False
+        self.jump_count = 0  # Reset jumps
         self.multiplier_timer = 0
         self.lives = 3
         self.score = 0
@@ -101,10 +98,9 @@ class Player(pygame.sprite.Sprite):
         # Update Rect
         self.rect.midbottom = self.pos
 
-        # Multiplier Timer (5 seconds = 300 frames)
+        # Multiplier Timer (5 seconds = 300 frames) 
         if self.multiplier_timer > 0:
             self.multiplier_timer -= 1
-            # Flash Gold
             if self.multiplier_timer % 10 < 5:
                 self.image.fill(GOLD_COLOR)
             else:
@@ -112,30 +108,33 @@ class Player(pygame.sprite.Sprite):
         else:
             self.image.fill(PLAYER_COLOR)
 
-        # Unlock Double Jump Check
-        if self.score >= DOUBLE_JUMP_THRESHOLD:
-            self.double_jump_ready = True
-
     def jump(self):
-        # Jump only if standing on a platform
+        # Check collision with ground just to see if we are grounded
         self.rect.y += 2
         hits = pygame.sprite.spritecollide(self, self.game.platforms, False)
         self.rect.y -= 2
         
+        # Logic: If on ground, reset count. 
         if hits:
+            self.jump_count = 0
+
+        # JUMP 1: Normal Jump
+        if self.jump_count == 0:
             self.vel.y = JUMP_FORCE
-            self.jumping = True
-        # Double Jump Logic
-        elif self.double_jump_ready and self.jumping:
+            self.jump_count = 1
+            
+        # JUMP 2: Double Jump (Only if unlocked)
+        elif self.jump_count == 1 and self.score >= DOUBLE_JUMP_THRESHOLD:
             self.vel.y = JUMP_FORCE
-            self.jumping = False # Disable until reset
-            # Create particle effect for double jump
-            for _ in range(10):
+            self.jump_count = 2 # Mark as used
+            
+            # Create particle effect for double jump (White explosion)
+            for _ in range(15):
                 self.game.particles.add(Particle(self.rect.centerx, self.rect.bottom, WHITE))
 
     def bounce(self):
         """ Used when stomping enemies """
-        self.vel.y = -10 # Small hop
+        self.vel.y = -20 # Small hop
         self.multiplier_timer = 300 # 5 Seconds
         
 class Platform(pygame.sprite.Sprite):
@@ -245,7 +244,6 @@ class Game:
             if event.type == pygame.KEYDOWN:
                 if self.game_state == "PLAYING" and event.key == pygame.K_SPACE:
                     self.player.jump()
-                # FIXED: Add restart functionality
                 if self.game_state == "GAMEOVER" and event.key == pygame.K_r:
                     self.reset_game()
 
@@ -270,50 +268,42 @@ class Game:
                 self.platforms.add(p)
                 self.all_sprites.add(p)
 
-        # 2. Platform Collisions (Landing) - FIXED
+        # 2. Platform Collisions (Landing)
         if self.player.vel.y > 0:
             hits = pygame.sprite.spritecollide(self.player, self.platforms, False)
             if hits:
-                # Find the highest platform (lowest y value) that we're colliding with
-                # and check if we're landing on top of it
                 for platform in hits:
-                    # Check if player is falling onto this platform from above
-                    # Use a small tolerance (8 pixels) for better feel
                     if (self.player.rect.bottom >= platform.rect.top and 
                         self.player.rect.bottom <= platform.rect.top + 15 and
                         self.player.vel.y > 0):
                         
                         self.player.pos.y = platform.rect.top
                         self.player.vel.y = 0
-                        self.player.jumping = False  # Reset jump state on landing
+                        self.player.jump_count = 0  # <--- RESET JUMP COUNT ON LANDING
                         
                         if not platform.passed:
-                            # Score Calculation: Multiplier applies here
                             mult = 2 if self.player.multiplier_timer > 0 else 1
                             self.player.score += (10 * mult)
                             platform.passed = True
-                        break  # Only land on one platform
+                        break 
 
-        # 3. Enemy "Stomp" Logic (The fun part!)
+        # 3. Enemy "Stomp" Logic
         enemy_hits = pygame.sprite.spritecollide(self.player, self.enemies, False)
         for enemy in enemy_hits:
             # Check if hitting from TOP (Stomp)
             if self.player.vel.y > 0 and self.player.rect.bottom < enemy.rect.centery + 10:
-                # Kill Enemy
                 enemy.kill()
                 self.player.bounce()
-                # Explosion Effect
                 for _ in range(15):
                     self.particles.add(Particle(enemy.rect.centerx, enemy.rect.centery, ENEMY_COLOR))
             else:
-                # Player takes damage
                 self.player.lives -= 1
-                self.shake_timer = 10 # Trigger Shake
+                self.shake_timer = 10
                 self.player.pos = pygame.math.Vector2(SCREEN_WIDTH/2, SCREEN_HEIGHT/2)
                 self.player.vel = pygame.math.Vector2(0, 0)
-                self.enemies.empty() # Clear screen to prevent instant death loop
+                self.enemies.empty() 
 
-        # 4. Spawning Enemies (Spec: 110 frames ~ 1.8s)
+        # 4. Spawning Enemies
         self.spawn_timer += 1
         if self.spawn_timer >= 110:
             e = Enemy()
@@ -327,7 +317,6 @@ class Game:
             self.shake_timer = 10
             self.player.pos = pygame.math.Vector2(SCREEN_WIDTH/2, SCREEN_HEIGHT/2)
             self.player.vel = pygame.math.Vector2(0, 0)
-            # Create safety platform
             p = Platform(self.player.rect.x - 50, self.player.rect.y + 60, 200)
             self.platforms.add(p)
             self.all_sprites.add(p)
@@ -337,44 +326,42 @@ class Game:
             self.game_state = "GAMEOVER"
 
     def draw(self):
-        # Handle Screen Shake Offset
         ox, oy = self.screen_shake()
-        
-        # Draw Background
         self.screen.fill(BG_COLOR)
         self.draw_grid()
 
-        # Draw Sprites (with offset)
         for sprite in self.all_sprites:
             self.screen.blit(sprite.image, (sprite.rect.x + ox, sprite.rect.y + oy))
         for p in self.particles:
             self.screen.blit(p.image, (p.rect.x + ox, p.rect.y + oy))
 
-        # --- DRAW UI (KPI Dashboard Style) ---
-        # Draw a top bar background
+        # UI
         pygame.draw.rect(self.screen, (30, 30, 40), (0, 0, SCREEN_WIDTH, 60))
         pygame.draw.line(self.screen, WHITE, (0, 60), (SCREEN_WIDTH, 60), 2)
 
-        # 1. Score KPI
         score_surf = self.font.render(f"REVENUE (SCORE): ${self.player.score}k", True, PLAYER_ACCENT)
         self.screen.blit(score_surf, (20, 20))
 
-        # 2. Lives KPI
         lives_color = PLAYER_ACCENT if self.player.lives > 1 else ENEMY_COLOR
         lives_surf = self.font.render(f"CAPITAL (LIVES): {self.player.lives}", True, lives_color)
         self.screen.blit(lives_surf, (300, 20))
 
-        # 3. Multiplier Status
+        # Show if Double Jump is unlocked
+        if self.player.score >= DOUBLE_JUMP_THRESHOLD:
+            dj_status = "UNLOCKED"
+            dj_color = GOLD_COLOR
+        else:
+            dj_status = f"LOCKED (<{DOUBLE_JUMP_THRESHOLD})"
+            dj_color = (100, 100, 100)
+            
+        dj_surf = self.font.render(f"DOUBLE JUMP: {dj_status}", True, dj_color)
+        self.screen.blit(dj_surf, (550, 40)) # Positioned below multiplier
+
         if self.player.multiplier_timer > 0:
             mult_surf = self.font.render("MARKET BOOM: 2X ACTIVE!", True, GOLD_COLOR)
-            self.screen.blit(mult_surf, (550, 20))
-        else:
-            mult_surf = self.font.render("MARKET: STABLE", True, (100, 100, 100))
-            self.screen.blit(mult_surf, (550, 20))
+            self.screen.blit(mult_surf, (550, 10))
 
-        # FIXED: Better Game Over screen with restart instruction
         if self.game_state == "GAMEOVER":
-            # Darken screen
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
             overlay.set_alpha(180)
             overlay.fill((0, 0, 0))
